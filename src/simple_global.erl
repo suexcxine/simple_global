@@ -14,7 +14,7 @@
 
 %% API
 -export([start_link/0, start/0]).
--export([whereis_name/1, register_name/2, unregister_name/1, send/2]).
+-export([whereis_name/1, register_name/2, unregister_name/1, send/2, set_meta/2]).
 -export([local_registered_names/0, local_registered_info/0, registered_names/0, registered_info/0]).
 
 %% gen_server callbacks
@@ -36,7 +36,7 @@ start() ->
 %% dirty read ets
 whereis_name(Name) ->
     case ets:lookup(?ETS, Name) of
-        [{_, Pid, _, _}] -> Pid;
+        [{_, Pid, _, _, _}] -> Pid;
         _ -> undefined
     end.
 
@@ -52,20 +52,23 @@ send(Name, Msg) ->
         Pid -> Pid ! Msg
     end.
 
+set_meta(Name, Meta) ->
+    gen_server:call(?SERVER, {set_meta, Name, Meta}).
+
 local_registered_names() ->
-    Ms = [{{'$1', '_', '$3', '_'}, [{'=:=', '$3', local}], ['$1']}],
+    Ms = [{{'$1', '_', '$3', '_', '_'}, [{'=:=', '$3', local}], ['$1']}],
     ets:select(?ETS, Ms).
 
 local_registered_info() ->
-    Ms = [{{'$1', '$2', '$3', '_'}, [{'=:=', '$3', local}], [{{'$1', '$2'}}]}],
+    Ms = [{{'$1', '$2', '$3', '_', '_'}, [{'=:=', '$3', local}], [{{'$1', '$2'}}]}],
     ets:select(?ETS, Ms).
 
 registered_names() ->
-    Ms = [{{'$1', '_', '$3', '_'}, [], ['$1']}],
+    Ms = [{{'$1', '_', '$3', '_', '_'}, [], ['$1']}],
     ets:select(?ETS, Ms).
 
 registered_info() ->
-    Ms = [{{'$1', '$2', '$3', '_'}, [], [{{'$1', '$2'}}]}],
+    Ms = [{{'$1', '$2', '$3', '_', '_'}, [], [{{'$1', '$2'}}]}],
     ets:select(?ETS, Ms).
 
 %%%===================================================================
@@ -92,7 +95,7 @@ handle_call({register, Name, Pid}, _From, #{peers := Peers} = State) ->
                     no;
                 false ->
                     MRef = erlang:monitor(process, Pid),
-                    ets:insert(?ETS, {Name, Pid, local, MRef}),
+                    ets:insert(?ETS, {Name, Pid, local, MRef, {}}),
                     ets:insert(?ETS, {{ref, MRef}, Name}),
                     broadcast(maps:keys(Peers), {register_notify, self(), Name, Pid}),
                     yes
@@ -105,7 +108,7 @@ handle_call({register, Name, Pid}, _From, #{peers := Peers} = State) ->
 
 handle_call({unregister, Name}, _From, #{peers := Peers} = State) ->
     case ets:lookup(?ETS, Name) of
-        [{_, _Pid, local, MRef}] ->
+        [{_, _Pid, local, MRef, _}] ->
             ets:delete(?ETS, {ref, MRef}),
             ets:delete(?ETS, Name),
             erlang:demonitor(MRef),
@@ -117,8 +120,20 @@ handle_call({unregister, Name}, _From, #{peers := Peers} = State) ->
     end,
     {reply, ok, State};
 
+handle_call({set_meta, Name, Meta}, _From, #{peers := Peers} = State) ->
+    case ets:lookup(?ETS, Name) of
+        [{_, Pid, local, MRef, _}] ->
+            ets:insert(?ETS, {Name, Pid, local, MRef, Meta}),
+            broadcast(maps:keys(Peers), {add_meta_notify, self(), Name, Meta}),
+            ok;
+        _ ->
+            % only local process is allowed, to guarantee consistency
+            ok
+    end,
+    {reply, ok, State};
+
 handle_call(Request, _From, State) ->
-    logger:warn("simple_global received unknown call msg: ~p~n", [Request]),
+    logger:warning("simple_global received unknown call msg: ~p~n", [Request]),
     {reply, ok, State}.
 
 handle_cast({sync_resp, Peer, Regs}, #{peers := Peers} = State) ->
@@ -135,7 +150,7 @@ handle_cast({sync_resp, Peer, Regs}, #{peers := Peers} = State) ->
     end;
 
 handle_cast(Msg, State) ->
-    logger:warn("simple_global received unknown cast msg: ~p~n", [Msg]),
+    logger:warning("simple_global received unknown cast msg: ~p~n", [Msg]),
     {noreply, State}.
 
 handle_info({register_notify, Peer, Name, Pid}, #{peers := Peers} = State) ->
@@ -160,6 +175,17 @@ handle_info({unregister_notify, Peer, Name}, #{peers := Peers} = State) ->
     end,
     {noreply, State};
 
+handle_info({add_meta_notify, Peer, Name, Meta}, #{peers := Peers} = State) ->
+    case maps:find(Peer, Peers) of
+        {ok, _} ->
+            on_remote_addmeta_notify(Name, node(Peer), Meta);
+        _ ->
+            % from unknown peer
+            logger:warning("simple_global: addmeta_notify msg from unknown peer: ~p~n", [{Peer, Name}]),
+            ok
+    end,
+    {noreply, State};
+
 handle_info({sync_req, Peer}, #{peers := Peers} = State) ->
     gen_server:cast(Peer, {sync_resp, self(), local_registered_info()}),
     % do we know this peer ?
@@ -178,7 +204,7 @@ handle_info({'DOWN', MRef, process, Pid, _Info}, #{peers := Peers} = State) when
         [{_, Name}] ->
             ets:delete(?ETS, {ref, MRef}),
             case ets:lookup(?ETS, Name) of
-                [{_, Pid, _, MRef}] ->
+                [{_, Pid, _, MRef, _}] ->
                     ets:delete(?ETS, Name),
                     broadcast(maps:keys(Peers), {unregister_notify, self(), Name}),
                     ok;
@@ -197,7 +223,7 @@ handle_info({'DOWN', _MRef, process, Pid, _Info}, #{peers := Peers} = State) ->
     case maps:take(Pid, Peers) of
         {_, LeftPeers} ->
             Node = node(Pid),
-            Ms = [{{'_', '_', '$1', '_'}, [{'=:=', '$1', Node}], [true]}],
+            Ms = [{{'_', '_', '$1', '_', '_'}, [{'=:=', '$1', Node}], [true]}],
             ets:select_delete(?ETS, Ms),
             % we don't need to clear ref records
             % since only local registration have those ref records
@@ -216,7 +242,7 @@ handle_info({nodedown, _Node}, State) ->
     {noreply, State};
 
 handle_info(Info, State) ->
-    logger:warn("simple_global received unknown info msg: ~p~n", [Info]),
+    logger:warning("simple_global received unknown info msg: ~p~n", [Info]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->
@@ -231,23 +257,33 @@ code_change(_OldVsn, State, _Extra) ->
 
 on_remote_reg_notify(Name, Pid) ->
     case ets:lookup(?ETS, Name) of
-        [{_, OldPid, _, _}] when Pid =/= OldPid ->
+        [{_, OldPid, _, _, _}] when Pid =/= OldPid ->
             % name clash
             resolve_nameclash(Name, OldPid, Pid);
         _ ->
             % no reference for remote process, since it's not monitored locally
             % so, just place an undefined
-            ets:insert(?ETS, {Name, Pid, node(Pid), undefined}),
+            ets:insert(?ETS, {Name, Pid, node(Pid), undefined, {}}),
             ok
     end.
 
 on_remote_unreg_notify(Name, Node) ->
     case ets:lookup(?ETS, Name) of
-        [{_, _Pid, Node, _}] when Node =/= local ->
+        [{_, _Pid, Node, _, _}] when Node =/= local ->
             ets:delete(?ETS, Name),
             ok;
         _ ->
             % unreg notify from wrong node, ignore
+            ok
+    end.
+
+on_remote_addmeta_notify(Name, Node, Meta) ->
+    case ets:lookup(?ETS, Name) of
+        [{_, Pid, Node, _, _}] when Node =/= local ->
+            ets:insert(?ETS, {Name, Pid, node(Pid), undefined, Meta}),
+            ok;
+        _ ->
+            % addmeta notify from wrong node, ignore
             ok
     end.
 
@@ -263,7 +299,7 @@ resolve_nameclash(Name, OldPid, Pid) when node(Pid) < node(OldPid) ->
             ok
     end,
     % no reference for remote process, since it's not monitored locally
-    ets:insert(?ETS, {Name, Pid, node(Pid), undefined}),
+    ets:insert(?ETS, {Name, Pid, node(Pid), undefined, {}}),
     ok;
 resolve_nameclash(_Name, _OldPid, _Pid) ->
     % just ignore, since we are right

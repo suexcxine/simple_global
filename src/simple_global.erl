@@ -13,7 +13,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0]).
+-export([start_link/0, start/0]).
 -export([whereis_name/1, register_name/2, unregister_name/1, send/2]).
 -export([local_registered_names/0, local_registered_info/0, registered_names/0, registered_info/0]).
 
@@ -29,6 +29,9 @@
 
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+
+start() ->
+    gen_server:start({local, ?SERVER}, ?MODULE, [], []).
 
 %% dirty read ets
 whereis_name(Name) ->
@@ -101,11 +104,11 @@ handle_call({register, Name, Pid}, _From, #{peers := Peers} = State) ->
     {reply, Result, State};
 
 handle_call({unregister, Name}, _From, #{peers := Peers} = State) ->
-    case ets:lookup(Name) of
+    case ets:lookup(?ETS, Name) of
         [{_, _Pid, local, MRef}] ->
-            erlang:demonitor(MRef),
             ets:delete(?ETS, {ref, MRef}),
             ets:delete(?ETS, Name),
+            erlang:demonitor(MRef),
             broadcast(maps:keys(Peers), {unregister_notify, self(), Name}),
             ok;
         _ ->
@@ -119,6 +122,7 @@ handle_call(Request, _From, State) ->
     {reply, ok, State}.
 
 handle_cast({sync_resp, Peer, Regs}, #{peers := Peers} = State) ->
+    % logger:debug("got sync_resp from peer: ~p, regs: ~p~n", [node(Peer), Regs]),
     % receive reg data from peer
     lists:foreach(fun({Name, Pid}) -> on_remote_reg_notify(Name, Pid) end, Regs),
     % do we know this peer ?
@@ -190,22 +194,21 @@ handle_info({'DOWN', MRef, process, Pid, _Info}, #{peers := Peers} = State) when
 
 handle_info({'DOWN', _MRef, process, Pid, _Info}, #{peers := Peers} = State) ->
     % remote simple_global process is down
-    case maps:find(Pid, Peers) of
-        {ok, _} ->
+    case maps:take(Pid, Peers) of
+        {_, LeftPeers} ->
             Node = node(Pid),
             Ms = [{{'_', '_', '$1', '_'}, [{'=:=', '$1', Node}], [true]}],
             ets:select_delete(?ETS, Ms),
             % we don't need to clear ref records
             % since only local registration have those ref records
-            ok;
+            {noreply, State#{peers => LeftPeers}};
         _ ->
-            ok
-    end,
-    {noreply, State};
+            {noreply, State}
+    end;
 
 %% nodeup: discover if there is a peer
 handle_info({nodeup, Node}, State) ->
-    {?SERVER, Node} ! {sync_req, self()},
+    erlang:send({?SERVER, Node}, {sync_req, self()}, [noconnect]),
     {noreply, State};
 
 %% we do nothing here, since there would be a DOWN message of simple_global peer process
@@ -228,18 +231,19 @@ code_change(_OldVsn, State, _Extra) ->
 
 on_remote_reg_notify(Name, Pid) ->
     case ets:lookup(?ETS, Name) of
-        [{_, OldPid, _, _}] ->
+        [{_, OldPid, _, _}] when Pid =/= OldPid ->
             % name clash
             resolve_nameclash(Name, OldPid, Pid);
         _ ->
             % no reference for remote process, since it's not monitored locally
+            % so, just place an undefined
             ets:insert(?ETS, {Name, Pid, node(Pid), undefined}),
             ok
     end.
 
 on_remote_unreg_notify(Name, Node) ->
     case ets:lookup(?ETS, Name) of
-        [{_, _Pid, Node, _}] ->
+        [{_, _Pid, Node, _}] when Node =/= local ->
             ets:delete(?ETS, Name),
             ok;
         _ ->
@@ -247,7 +251,7 @@ on_remote_unreg_notify(Name, Node) ->
             ok
     end.
 
-resolve_nameclash(Name, Pid, OldPid) when node(Pid) < node(OldPid) ->
+resolve_nameclash(Name, OldPid, Pid) when node(Pid) < node(OldPid) ->
     case node(OldPid) =:= node() of
         true ->
             % old pid is registered locally
@@ -261,7 +265,7 @@ resolve_nameclash(Name, Pid, OldPid) when node(Pid) < node(OldPid) ->
     % no reference for remote process, since it's not monitored locally
     ets:insert(?ETS, {Name, Pid, node(Pid), undefined}),
     ok;
-resolve_nameclash(_Name, _Pid, _OldPid) ->
+resolve_nameclash(_Name, _OldPid, _Pid) ->
     % just ignore, since we are right
     % let other sides do something
     ok.

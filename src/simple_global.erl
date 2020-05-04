@@ -293,7 +293,7 @@ resolve_nameclash(Name, OldPid, Pid) when node(Pid) < node(OldPid) ->
             % old pid is registered locally
             % kill old one according to our rule
             % we can expect a DOWN msg to do cleaning for this kill
-            logger:info("simple_global: Name conflict, terminating ~p~n", [{Name, OldPid}]),
+            logger:error("simple_global: Name conflict, terminating ~p~n", [{Name, OldPid}]),
             exit(OldPid, kill);
         false ->
             ok

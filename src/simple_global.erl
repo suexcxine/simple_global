@@ -14,7 +14,7 @@
 
 %% API
 -export([start_link/0, start/0]).
--export([whereis_name/1, register_name/2, unregister_name/1, send/2, set_meta/2]).
+-export([whereis_name/1, register_name/2, unregister_name/1, send/2, set_meta/2, set_priority/1]).
 -export([local_registered_names/0, local_registered_info/0, registered_names/0, registered_info/0]).
 
 %% gen_server callbacks
@@ -54,6 +54,9 @@ send(Name, Msg) ->
 
 set_meta(Name, Meta) ->
     gen_server:call(?SERVER, {set_meta, Name, Meta}).
+
+set_priority(Priority) ->
+    gen_server:call(?SERVER, {set_priority, Priority}).
 
 local_registered_names() ->
     Ms = [{{'$1', '_', '$3', '_', '_'}, [{'=:=', '$3', local}], ['$1']}],
@@ -132,6 +135,10 @@ handle_call({set_meta, Name, Meta}, _From, #{peers := Peers} = State) ->
             ok
     end,
     {reply, ok, State};
+
+handle_call({set_priority, Priority}, _From, State) ->
+    Result = (catch process_flag(priority, Priority)),
+    {reply, Result, State};
 
 handle_call(Request, _From, State) ->
     logger:warning("simple_global received unknown call msg: ~p~n", [Request]),

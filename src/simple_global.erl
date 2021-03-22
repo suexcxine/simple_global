@@ -84,7 +84,6 @@ registered_info() ->
 %% }
 init([]) ->
     process_flag(trap_exit, true),
-    process_flag(priority, high),
     ok = net_kernel:monitor_nodes(true),
     broadcast([{?SERVER, Node} || Node <- nodes()], {sync_req, self()}),
     ets:new(?ETS, [ordered_set, named_table, public, {keypos, 1}, {read_concurrency, true}]),

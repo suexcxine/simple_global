@@ -1,5 +1,5 @@
 {application, simple_global,
- [{description, "An OTP library"},
+ [{description, "A simple global name register with high performance."},
   {vsn, "0.1.0"},
   {registered, []},
   {applications,
@@ -10,5 +10,5 @@
   {modules, []},
 
   {licenses, ["Apache 2.0"]},
-  {links, []}
+  {links, [{"GitHub", "https://github.com/suexcxine/simple_global"}]}
  ]}.

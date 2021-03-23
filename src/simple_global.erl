@@ -98,7 +98,7 @@ handle_call({register, Name, Pid}, _From, #{peers := Peers} = State) ->
                     no;
                 false ->
                     MRef = erlang:monitor(process, Pid),
-                    ets:insert(?ETS, {Name, Pid, local, MRef, {}}),
+                    ets:insert(?ETS, {Name, Pid, local, MRef, #{}}),
                     ets:insert(?ETS, {{ref, MRef}, Name}),
                     broadcast(maps:keys(Peers), {register_notify, self(), Name, Pid}),
                     yes
@@ -270,7 +270,7 @@ on_remote_reg_notify(Name, Pid) ->
         _ ->
             % no reference for remote process, since it's not monitored locally
             % so, just place an undefined
-            ets:insert(?ETS, {Name, Pid, node(Pid), undefined, {}}),
+            ets:insert(?ETS, {Name, Pid, node(Pid), undefined, #{}}),
             ok
     end.
 
@@ -306,7 +306,7 @@ resolve_nameclash(Name, OldPid, Pid) when node(Pid) < node(OldPid) ->
             ok
     end,
     % no reference for remote process, since it's not monitored locally
-    ets:insert(?ETS, {Name, Pid, node(Pid), undefined, {}}),
+    ets:insert(?ETS, {Name, Pid, node(Pid), undefined, #{}}),
     ok;
 resolve_nameclash(_Name, _OldPid, _Pid) ->
     % just ignore, since we are right

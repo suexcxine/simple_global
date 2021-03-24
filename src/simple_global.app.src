@@ -1,6 +1,6 @@
 {application, simple_global,
  [{description, "A simple global name register with high performance."},
-  {vsn, "0.1.2"},
+  {vsn, "0.1.3"},
   {registered, []},
   {applications,
    [kernel,

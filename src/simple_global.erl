@@ -128,12 +128,11 @@ handle_call({set_meta, Name, Meta}, _From, #{peers := Peers} = State) ->
         [{_, Pid, local, MRef, _}] ->
             ets:insert(?ETS, {Name, Pid, local, MRef, Meta}),
             broadcast(maps:keys(Peers), {add_meta_notify, self(), Name, Meta}),
-            ok;
+            {reply, ok, State};
         _ ->
             % only local process is allowed, to guarantee consistency
-            ok
-    end,
-    {reply, ok, State};
+            {reply, error, State}
+    end;
 
 handle_call({set_priority, Priority}, _From, State) ->
     Result = (catch process_flag(priority, Priority)),

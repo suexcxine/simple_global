@@ -206,7 +206,7 @@ handle_info({sync_req, Peer}, #{peers := Peers} = State) ->
             {noreply, State};
         false ->
             MRef = monitor(process, Peer),
-            erlang:send(Peer, {sync_req, self()}, [noconnect]),
+            erlang:send(Peer, {sync_req, self()}),
             {noreply, State#{peers => Peers#{Peer => MRef}}}
     end;
 
@@ -246,7 +246,7 @@ handle_info({'DOWN', _MRef, process, Pid, _Info}, #{peers := Peers} = State) ->
 
 %% nodeup: discover if there is a peer
 handle_info({nodeup, Node}, State) ->
-    erlang:send({?SERVER, Node}, {sync_req, self()}, [noconnect]),
+    erlang:send({?SERVER, Node}, {sync_req, self()}),
     {noreply, State};
 
 %% we do nothing here, since there would be a DOWN message of simple_global peer process
@@ -322,5 +322,5 @@ resolve_nameclash(_Name, _OldPid, _Pid, _Meta) ->
     ok.
 
 broadcast(Peers, Msg) ->
-    lists:foreach(fun(I) -> erlang:send(I, Msg, [noconnect]) end, Peers).
+    lists:foreach(fun(I) -> erlang:send(I, Msg) end, Peers).
 

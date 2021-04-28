@@ -63,7 +63,7 @@ local_registered_names() ->
     ets:select(?ETS, Ms).
 
 local_registered_info() ->
-    Ms = [{{'$1', '$2', '$3', '_', '_'}, [{'=:=', '$3', local}], [{{'$1', '$2'}}]}],
+    Ms = [{{'$1', '$2', '$3', '_', '$4'}, [{'=:=', '$3', local}], [{{'$1', '$2', '$4'}}]}],
     ets:select(?ETS, Ms).
 
 registered_names() ->
@@ -146,7 +146,12 @@ handle_call(Request, _From, State) ->
 handle_cast({sync_resp, Peer, Regs}, #{peers := Peers} = State) ->
     % logger:debug("got sync_resp from peer: ~p, regs: ~p~n", [node(Peer), Regs]),
     % receive reg data from peer
-    lists:foreach(fun({Name, Pid}) -> on_remote_reg_notify(Name, Pid) end, Regs),
+    lists:foreach(fun
+        ({Name, Pid}) ->
+            on_remote_reg_notify(Name, Pid);
+        ({Name, Pid, Meta}) ->
+            on_remote_reg_notify(Name, Pid, Meta)
+    end, Regs),
     % do we know this peer ?
     case maps:is_key(Peer, Peers) of
         true ->
@@ -263,14 +268,17 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 on_remote_reg_notify(Name, Pid) ->
+    on_remote_reg_notify(Name, Pid, #{}).
+
+on_remote_reg_notify(Name, Pid, Meta) ->
     case ets:lookup(?ETS, Name) of
         [{_, OldPid, _, _, _}] when Pid =/= OldPid ->
             % name clash
-            resolve_nameclash(Name, OldPid, Pid);
+            resolve_nameclash(Name, OldPid, Pid, Meta);
         _ ->
             % no reference for remote process, since it's not monitored locally
             % so, just place an undefined
-            ets:insert(?ETS, {Name, Pid, node(Pid), undefined, #{}}),
+            ets:insert(?ETS, {Name, Pid, node(Pid), undefined, Meta}),
             ok
     end.
 
@@ -294,7 +302,7 @@ on_remote_addmeta_notify(Name, Node, Meta) ->
             ok
     end.
 
-resolve_nameclash(Name, OldPid, Pid) when node(Pid) < node(OldPid) ->
+resolve_nameclash(Name, OldPid, Pid, Meta) when node(Pid) < node(OldPid) ->
     case node(OldPid) =:= node() of
         true ->
             % old pid is registered locally
@@ -306,9 +314,9 @@ resolve_nameclash(Name, OldPid, Pid) when node(Pid) < node(OldPid) ->
             ok
     end,
     % no reference for remote process, since it's not monitored locally
-    ets:insert(?ETS, {Name, Pid, node(Pid), undefined, #{}}),
+    ets:insert(?ETS, {Name, Pid, node(Pid), undefined, Meta}),
     ok;
-resolve_nameclash(_Name, _OldPid, _Pid) ->
+resolve_nameclash(_Name, _OldPid, _Pid, _Meta) ->
     % just ignore, since we are right
     % let other sides do something
     ok.
